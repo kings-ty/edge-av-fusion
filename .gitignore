@@ -1,0 +1,22 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+.build/
+.pytest_cache/
+
+# device-specific artifacts (rebuild with tools/, never commit)
+models/*.plan
+models/*.onnx
+models/*.buildlog.txt
+
+# measurements (regenerate with src/avfusion/bench/)
+bench_results/
+
+# ros2 workspace build outputs
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# local tool state
+.claude/settings.local.json

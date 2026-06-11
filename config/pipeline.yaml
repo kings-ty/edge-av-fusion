@@ -1,0 +1,45 @@
+# edge-av-fusion pipeline configuration
+audio:
+  sample_rate: 48000          # capture rate; DoA runs here (see ARCHITECTURE §2.1)
+  channels: 2
+  hop_samples: 512            # 10.67 ms @ 48 kHz
+  ring_capacity_hops: 256     # ~2.7 s of audio
+  alsa_device: "hw:seeed2micvoicec"   # Mode A; falls back to "default" if absent
+
+doa:
+  window_samples: 4096        # 85 ms analysis window
+  mic_spacing_m: 0.058        # ReSpeaker 2-Mic HAT
+  speed_of_sound: 343.0
+  backend: "numpy"            # numpy | torch-cpu | torch-cuda (bench can override)
+  phat_beta: 1.0              # 1.0 = full PHAT; <1 trades robustness for SNR weighting
+  gate:
+    history: 200              # hops of prominence history for median/MAD
+    z_threshold: 4.0          # prominence z-score to accept a peak
+    min_peak_ratio: 1.8       # main/secondary peak ratio
+
+classifier:
+  target_rate_hz: 1.0         # classify once per second
+  classifier_sample_rate: 16000
+  n_mels: 64
+  win_ms: 25.0
+  hop_ms: 10.0
+  patch_frames: 96            # 0.96 s patch -> input [1,1,64,96]
+  engine_path: "models/vehicle_fp16.plan"
+  onnx_path: "models/vehicle.onnx"
+  classes: [vehicle_engine, horn, siren, tire_road, background]
+  vehicle_classes: [vehicle_engine, horn, siren, tire_road]
+  trigger_threshold: 0.6
+
+fusion:
+  candidate_hold_hops: 8      # DoA stability required to enter CANDIDATE
+  doa_stability_deg: 15.0
+  vision_timeout_s: 2.0
+  track_max_coast_s: 1.5
+  alpha: 0.35                 # alpha-beta filter gains
+  beta: 0.05
+
+ros:
+  detections_topic: "/av_fusion/detections"
+  diagnostics_topic: "/av_fusion/diagnostics"
+  vision_topic: "/av_fusion/vision_confirmation"
+  odom_topic: "/odom"
