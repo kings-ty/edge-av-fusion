@@ -14,6 +14,8 @@ Workloads measured:
 Usage: python3 -m avfusion.bench.membw --media test.mp4
 """
 import argparse
+import os
+import pty
 import re
 import subprocess
 import threading
@@ -32,20 +34,41 @@ class TegrastatsMonitor:
     """Background tegrastats reader; collects effective-GB/s samples."""
 
     def __init__(self, interval_ms: int = 100):
-        self._proc = subprocess.Popen(
-            ["tegrastats", "--interval", str(interval_ms)],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        # EMC counters need root on L4T R35; /etc/sudoers.d/avfusion-bench
+        # grants passwordless tegrastats, so prefer sudo when it works
+        # probe with `sudo -l <cmd>`: checks the tegrastats whitelist entry
+        # itself — `sudo -n true` would need a broader grant and fails
+        cmd = ["tegrastats", "--interval", str(interval_ms)]
+        self._sudo = False
+        try:
+            if subprocess.run(["sudo", "-n", "-l", "tegrastats"],
+                              capture_output=True, timeout=5).returncode == 0:
+                cmd = ["sudo", "-n"] + cmd
+                self._sudo = True
+        except (OSError, subprocess.SubprocessError):
+            pass
+        # tegrastats block-buffers stdout when it is not a tty, so a plain
+        # PIPE never delivers a line; a pty forces line buffering
+        master, slave = pty.openpty()
+        self._proc = subprocess.Popen(cmd, stdout=slave,
+                                      stderr=subprocess.DEVNULL)
+        os.close(slave)
+        self._stdout = os.fdopen(master, "r", errors="replace")
         self.samples: List[float] = []
         self._collect = False
         self._thread = threading.Thread(target=self._reader, daemon=True)
         self._thread.start()
 
     def _reader(self) -> None:
-        for line in self._proc.stdout:
-            m = _EMC_RE.search(line)
-            if m and self._collect:
-                util, mhz = int(m.group(1)), int(m.group(2))
-                self.samples.append(util / 100.0 * mhz * 1e6 * BYTES_PER_CLOCK / 1e9)
+        try:
+            for line in self._stdout:
+                m = _EMC_RE.search(line)
+                if m and self._collect:
+                    util, mhz = int(m.group(1)), int(m.group(2))
+                    self.samples.append(
+                        util / 100.0 * mhz * 1e6 * BYTES_PER_CLOCK / 1e9)
+        except OSError:   # pty closed on shutdown
+            pass
 
     def measure(self, seconds: float) -> List[float]:
         self.samples = []
@@ -55,7 +78,18 @@ class TegrastatsMonitor:
         return list(self.samples)
 
     def close(self) -> None:
-        self._proc.terminate()
+        if self._sudo:
+            # the daemon runs as root: SIGTERM from the user is EPERM, but
+            # `tegrastats --stop` is covered by the same sudoers entry
+            subprocess.run(["sudo", "-n", "tegrastats", "--stop"],
+                           capture_output=True, timeout=10)
+        else:
+            self._proc.terminate()
+        try:
+            self._proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        self._stdout.close()
 
 
 def run_audio_pipeline(seconds: float) -> None:
@@ -74,10 +108,10 @@ def run_audio_pipeline(seconds: float) -> None:
 
 def gst_video_cmd(media: str, nvmm: bool) -> List[str]:
     if nvmm:
-        chain = ("h264parse ! nvv4l2decoder ! "
+        chain = ("parsebin ! nvv4l2decoder ! "
                  "'video/x-raw(memory:NVMM)' ! fakesink sync=false")
     else:
-        chain = ("h264parse ! nvv4l2decoder ! nvvidconv ! "
+        chain = ("parsebin ! nvv4l2decoder ! nvvidconv ! "
                  "video/x-raw,format=BGRx ! videoconvert ! "
                  "video/x-raw,format=RGB ! fakesink sync=false")
     return ["bash", "-c",

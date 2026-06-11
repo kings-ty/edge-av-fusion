@@ -89,6 +89,9 @@ class Pipeline:
                 self.classifier = VehicleSoundClassifier(
                     c.engine_path, list(c.classes), list(c.vehicle_classes))
                 self.stats.degraded = self.classifier.degraded
+                # absorb lazy CUDA/cuFFT/TRT first-call costs before the
+                # stream starts (seconds at 30W = a ring overflow mid-clip)
+                self.classifier.classify(self.mel.warmup())
             except Exception as exc:  # noqa: BLE001
                 log.warning("classifier branch disabled (%s); DoA-only mode", exc)
                 self.stats.degraded = True

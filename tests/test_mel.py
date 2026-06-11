@@ -13,9 +13,12 @@ from avfusion.dsp.mel import MelPatchExtractor
 
 
 def make_extractor():
+    # device=None -> same auto-selection as production (cuda when available).
+    # Forcing cpu here breaks on Jetson: the JP5 wheel's CPU GEMM is broken
+    # on Carmel cores (NaNs), and production never runs this path on CPU.
     return MelPatchExtractor(capture_rate=48000, classifier_rate=16000,
                              n_mels=64, win_ms=25.0, hop_ms=10.0,
-                             patch_frames=96, device="cpu")
+                             patch_frames=96, device=None)
 
 
 def test_patch_shape_and_stats():

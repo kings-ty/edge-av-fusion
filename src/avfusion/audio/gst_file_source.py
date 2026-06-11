@@ -41,8 +41,10 @@ class GstFileSource(AudioSource):
 
         if with_video:
             if use_nvdec:
+                # parsebin: codec-agnostic (phones record H.264 or HEVC);
+                # nvv4l2decoder handles both in hardware
                 video_branch = (
-                    " demux.video_0 ! queue ! h264parse ! nvv4l2decoder ! "
+                    " demux.video_0 ! queue ! parsebin ! nvv4l2decoder ! "
                     "nvvidconv ! video/x-raw,format=BGRx ! "
                     "appsink name=vsink emit-signals=true sync=true max-buffers=4 drop=true")
             else:  # system-memory decode path, kept for the membw A/B benchmark
