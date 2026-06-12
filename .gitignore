@@ -13,6 +13,11 @@ models/*.buildlog.txt
 # measurements (regenerate with src/avfusion/bench/)
 bench_results/
 
+# training (checkpoints live in W&B artifacts, data is downloadable)
+models/*.pt
+wandb/
+data/
+
 # ros2 workspace build outputs
 ros2_ws/build/
 ros2_ws/install/
