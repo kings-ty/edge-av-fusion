@@ -26,13 +26,33 @@ from avfusion.pipeline import Pipeline                     # noqa: E402
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("media")
+    ap.add_argument("media", nargs="?", default=None)
     ap.add_argument("--no-classifier", action="store_true")
+    ap.add_argument("--classifier-only", action="store_true",
+                    help="skip DoA gate; classifier alone drives alerts (phone video mode)")
     ap.add_argument("--config", default=None)
     args = ap.parse_args()
 
+    media = args.media
+    if not media:
+        import os
+        if os.path.isdir("Edge-materials"):
+            clips = sorted([f for f in os.listdir("Edge-materials") if f.endswith(".mp4")])
+            if clips:
+                media = clips[0]
+                print("No media specified, defaulting to: %s" % media)
+    
+    if not media:
+        print("Error: no media specified and Edge-materials/ is empty or missing")
+        sys.exit(1)
+
+    from dataclasses import replace
     cfg = load_config(args.config)
-    src = GstFileSource(args.media, cfg.audio.sample_rate, cfg.audio.channels,
+    if args.classifier_only:
+        from avfusion.config import FusionConfig
+        cfg = replace(cfg, fusion=replace(cfg.fusion, classifier_only=True))
+
+    src = GstFileSource(media, cfg.audio.sample_rate, cfg.audio.channels,
                         cfg.audio.hop_samples, cfg.audio.ring_capacity_hops)
 
     states = collections.Counter()

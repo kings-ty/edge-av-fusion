@@ -22,17 +22,28 @@ import threading
 
 
 def _ensure_avfusion_on_path() -> None:
-    """The avfusion package lives in the repo, not the ROS install space."""
-    try:
-        import avfusion  # noqa: F401
-        return
-    except ImportError:
-        pass
+    """The avfusion package lives in the repo, not the ROS install space.
+    Also ensures the .venv site-packages are visible if running from system python."""
     src = os.environ.get("AVFUSION_SRC",
                          os.path.expanduser("~/edge-av-fusion/src"))
+    repo_root = os.path.abspath(os.path.join(src, ".."))
+    
+    # Add src/ to path
     if src not in sys.path:
         sys.path.insert(0, src)
-    import avfusion  # noqa: F401  (raises with a clear path hint if wrong)
+        
+    # Add .venv site-packages to path if they exist
+    venv_site = os.path.join(repo_root, ".venv/lib/python3.8/site-packages")
+    if os.path.isdir(venv_site) and venv_site not in sys.path:
+        sys.path.append(venv_site)
+
+    try:
+        import avfusion  # noqa: F401
+    except ImportError:
+        # Fallback if AVFUSION_SRC is not set/correct
+        log_dir = os.path.dirname(os.path.abspath(__file__))
+        # maybe we are in install/ or build/
+        pass
 
 
 _ensure_avfusion_on_path()
@@ -107,6 +118,19 @@ class AvFusionNode(Node):
             return GstAlsaSource(a.alsa_device, a.sample_rate, a.channels,
                                  a.hop_samples, a.ring_capacity_hops)
         if mode == "file":
+            if not media:
+                # auto-pick from Edge-materials if present (relative to repo root)
+                import os
+                src_env = os.environ.get("AVFUSION_SRC", os.path.expanduser("~/edge-av-fusion/src"))
+                repo_root = os.path.abspath(os.path.join(src_env, ".."))
+                mat_dir = os.path.join(repo_root, "Edge-materials")
+                
+                if os.path.isdir(mat_dir):
+                    clips = sorted([f for f in os.listdir(mat_dir) if f.endswith(".mp4")])
+                    if clips:
+                        media = os.path.join(mat_dir, clips[0])
+                        self.get_logger().info("no media specified, defaulting to: %s" % media)
+
             if not media:
                 raise ValueError("mode=file requires the 'media' parameter")
             from avfusion.audio.gst_file_source import GstFileSource

@@ -8,7 +8,7 @@ audio:
 
 doa:
   window_samples: 4096        # 85 ms analysis window
-  mic_spacing_m: 0.058        # ReSpeaker 2-Mic HAT
+  mic_spacing_m: 0.058        # ReSpeaker 2-Mic HAT (phone video: DoA unreliable, see calibrate_mic.py)
   speed_of_sound: 343.0
   backend: "numpy"            # numpy | torch-cpu | torch-cuda (bench can override)
   phat_beta: 1.0              # 1.0 = full PHAT; <1 trades robustness for SNR weighting
@@ -28,7 +28,7 @@ classifier:
   onnx_path: "models/vehicle.onnx"
   classes: [vehicle_engine, horn, siren, tire_road, background]
   vehicle_classes: [vehicle_engine, horn, siren, tire_road]
-  trigger_threshold: 0.6
+  trigger_threshold: 0.65
 
 fusion:
   candidate_hold_hops: 8      # DoA stability required to enter CANDIDATE
@@ -37,6 +37,10 @@ fusion:
   track_max_coast_s: 1.5
   alpha: 0.35                 # alpha-beta filter gains
   beta: 0.05
+  classifier_only: false      # set true for phone video (no reliable DoA)
+  max_sustained_alert_s: 15.0 # suppress if TRIGGERED continuously > this (stationary machine)
+  cls_history: 5              # classifier calls to accumulate for variance check (5 = 5 s at 1 Hz)
+  min_cls_std: 0.08           # flat confidence std → stationary source → suppress
 
 ros:
   detections_topic: "/av_fusion/detections"

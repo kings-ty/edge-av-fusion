@@ -18,6 +18,24 @@ DDP notes (the parts interviewers ask about):
 - Backend: NCCL on x86 GPUs; gloo on Jetson (no NCCL on Tegra).
 - W&B logs from rank 0 only — N ranks logging the same step is noise.
 
+AMP (Automatic Mixed Precision):
+- GradScaler + autocast halve memory and double throughput on FP16-capable GPUs
+  (Volta on Xavier, Turing on T4).  Disabled automatically on CPU.
+- GradScaler handles inf/nan from FP16 underflow: it scales the loss up before
+  backward, then unscales before the optimizer step and skips the step if a
+  gradient is still inf (dynamic rescaling).
+- autocast selects FP16 for matmul/conv and keeps FP32 for reductions and loss.
+
+torch.compile (Triton/Inductor):
+- Fuses ops and emits Triton kernels; meaningful speedup on T4/A100.
+- Requires PyTorch >= 2.0 and CUDA >= 11.6.  Jetson JetPack 5 ships CUDA 11.4
+  and a 1.x/2.0-rc wheel, so compile silently no-ops there via the
+  hasattr(torch, "compile") guard — the same file runs on Xavier unmodified.
+- Compile order with DDP: compile the raw model first, *then* wrap with DDP.
+  DDP's gradient hooks are attached to the Python module object; if you compile
+  the DDP wrapper instead, the hooks fire on a compiled graph node and gradient
+  synchronization silently breaks.
+
 Dataset: ESC-50 (https://github.com/karolpiczak/ESC-50, CC BY-NC) mapped onto
 our classes; folds 1-4 train, fold 5 validation (the dataset's own protocol).
 Preprocessing MUST mirror dsp/mel.py (16 kHz, 64 mels, 25/10 ms, log,
@@ -115,6 +133,55 @@ class Esc50Vehicles(Dataset):
     train_mode = True
 
 
+class CustomAudioPatches(Dataset):
+    """Real-world recordings (wav) → mel patches labeled as `label`.
+
+    Stride of 0.96 s (one patch length, no overlap) keeps patches independent.
+    Capped at max_patches so one long clip doesn't dominate the dataset.
+    """
+
+    def __init__(self, wav_dir: str, label: str, max_patches: int = 400):
+        import torchaudio
+        self.items: list = []
+        mel_fn = make_mel()
+        need = 160 * (PATCH_FRAMES - 1) + 512
+        stride = need                              # non-overlapping: one patch per step
+        class_idx = CLASSES.index(label)
+        rng = np.random.default_rng(42)
+
+        wav_paths = sorted(Path(wav_dir).glob("*.wav"))
+        if not wav_paths:
+            raise FileNotFoundError("no .wav files found in %s" % wav_dir)
+
+        all_patches: list = []
+        for wp in wav_paths:
+            try:
+                wav, sr = torchaudio.load(str(wp))
+            except Exception as e:
+                print("custom_bg: skip %s (%s)" % (wp.name, e))
+                continue
+            wav = wav.mean(dim=0)
+            if sr != SAMPLE_RATE:
+                wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE)
+            start = 0
+            while start + need <= wav.numel():
+                patch = standardize(mel_fn(wav[start: start + need]))
+                all_patches.append((patch.unsqueeze(0), class_idx))
+                start += stride
+
+        # shuffle then cap so one long clip can't dominate
+        idx = rng.permutation(len(all_patches))[:max_patches]
+        self.items = [all_patches[i] for i in idx]
+        print("custom[%s]: %d files → %d/%d patches kept"
+              % (label, len(wav_paths), len(self.items), len(all_patches)))
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, i):
+        return self.items[i]
+
+
 class SyntheticPatches(Dataset):
     """Random patches: verifies DDP/W&B mechanics without any download."""
 
@@ -177,6 +244,12 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-4, help="base LR @ 1 GPU")
     ap.add_argument("--out", default="models/vehicle.pt")
     ap.add_argument("--wandb-project", default="edge-av-fusion")
+    ap.add_argument("--compile", action="store_true",
+                    help="enable torch.compile (Triton/Inductor) — requires CUDA>=11.6 + working Triton")
+    ap.add_argument("--custom-bg", default="",
+                    help="directory of .wav files to add as background class")
+    ap.add_argument("--custom-vehicle", default="",
+                    help="directory of .wav files to add as vehicle_engine class (real car recordings)")
     args = ap.parse_args()
 
     rank, world, local, backend = setup_dist()
@@ -189,6 +262,14 @@ def main():
         train_ds = Esc50Vehicles(args.data_root, train=True)
         val_ds = Esc50Vehicles(args.data_root, train=False)
         val_ds.train_mode = False
+        if args.custom_bg:
+            from torch.utils.data import ConcatDataset
+            train_ds = ConcatDataset([train_ds,
+                                      CustomAudioPatches(args.custom_bg, "background")])
+        if args.custom_vehicle:
+            from torch.utils.data import ConcatDataset
+            train_ds = ConcatDataset([train_ds,
+                                      CustomAudioPatches(args.custom_vehicle, "vehicle_engine")])
     use_ddp = dist.is_available() and dist.is_initialized() and world > 1
     train_sampler = DistributedSampler(train_ds, shuffle=True) if use_ddp else None
     train_dl = DataLoader(train_ds, batch_size=args.batch, num_workers=2,
@@ -199,8 +280,34 @@ def main():
                         if use_ddp else None)
 
     model = VehicleSoundNet(num_classes=len(CLASSES)).to(device)
+
+    # torch.compile: fuses ops into Triton kernels on PyTorch>=2.0 / CUDA>=11.6.
+    # Applied to the raw model BEFORE DDP so DDP's gradient hooks attach to the
+    # compiled graph correctly.
+    # Guard: torch.compile exists on the Jetson 2.0 wheel but the inductor backend
+    # requires Triton, which is not available on ARM64/CUDA 11.4. Check both.
+    def _triton_available() -> bool:
+        try:
+            import triton  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    use_compile = (args.compile
+                   and device.type == "cuda"
+                   and hasattr(torch, "compile")
+                   and _triton_available())
+    if use_compile:
+        model = torch.compile(model)
+
     if use_ddp:
         model = DDP(model, device_ids=[local] if device != "cpu" else None)
+
+    # AMP: GradScaler + autocast. Halves memory; ~2× throughput on FP16 GPUs.
+    # Disabled on CPU (Xavier fallback, Kaggle CPU kernels).
+    use_amp = device.type == "cuda"
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
     lr = args.lr * world                          # linear scaling rule
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, args.epochs)
@@ -213,6 +320,7 @@ def main():
                          config={**vars(args), "world_size": world,
                                  "backend": backend, "effective_lr": lr,
                                  "classes": CLASSES,
+                                 "amp": use_amp, "torch_compile": use_compile,
                                  "device": torch.cuda.get_device_name(local)
                                  if device != "cpu" else "cpu"})
 
@@ -225,9 +333,13 @@ def main():
         for x, y in train_dl:
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
             opt.zero_grad(set_to_none=True)
-            loss = loss_fn(model(x), y)
-            loss.backward()                       # all-reduce happens here
-            opt.step()
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                loss = loss_fn(model(x), y)
+            # scaler.scale() multiplies loss before backward so FP16 gradients
+            # don't underflow; scaler.step() unscales and skips if any grad is inf
+            scaler.scale(loss).backward()         # all-reduce happens here (DDP)
+            scaler.step(opt)
+            scaler.update()
             loss_sum += loss.item() * y.numel()
             seen += y.numel()
         sched.step()

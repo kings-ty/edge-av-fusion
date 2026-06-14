@@ -31,7 +31,7 @@ class MelPatchExtractor:
     def __init__(self, capture_rate: int = 48000, classifier_rate: int = 16000,
                  n_mels: int = 64, win_ms: float = 25.0, hop_ms: float = 10.0,
                  patch_frames: int = 96, device: Optional[str] = None):
-        if not _HAS_TORCH:
+        if not _HAS_TORCH or torch is None:
             raise RuntimeError("MelPatchExtractor requires torch + torchaudio "
                                "(scripts/setup_env.sh installs the JetPack wheel)")
         if capture_rate % classifier_rate:
@@ -89,14 +89,17 @@ class MelPatchExtractor:
         finally:
             self._filled = filled
 
-    @torch.no_grad()
     def patch(self) -> "torch.Tensor":
         """Return log-mel patch [1, 1, n_mels, patch_frames] on self.device."""
-        mono = torch.from_numpy(self._buf).to(self.device, non_blocking=True)
-        mono = self._resampler(mono)[: self.patch_samples]
-        mel = self._melspec(mono)                          # [n_mels, frames]
-        mel = torch.log(mel + 1e-6)
-        mel = mel[:, : self.patch_frames]
-        # per-patch standardization: classifier was trained on normalized mels
-        mel = (mel - mel.mean()) / (mel.std() + 1e-6)
-        return mel.unsqueeze(0).unsqueeze(0).contiguous()
+        if torch is None:
+            raise RuntimeError("torch is not available")
+            
+        with torch.no_grad():
+            mono = torch.from_numpy(self._buf).to(self.device, non_blocking=True)
+            mono = self._resampler(mono)[: self.patch_samples]
+            mel = self._melspec(mono)                          # [n_mels, frames]
+            mel = torch.log(mel + 1e-6)
+            mel = mel[:, : self.patch_frames]
+            # per-patch standardization: classifier was trained on normalized mels
+            mel = (mel - mel.mean()) / (mel.std() + 1e-6)
+            return mel.unsqueeze(0).unsqueeze(0).contiguous()

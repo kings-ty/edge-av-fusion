@@ -61,6 +61,10 @@ class FusionConfig:
     track_max_coast_s: float = 1.5
     alpha: float = 0.35
     beta: float = 0.05
+    classifier_only: bool = False   # skip DoA gate; classifier alone drives alerts
+    max_sustained_alert_s: float = 20.0  # suppress if triggered continuously > this (stationary machine heuristic)
+    cls_history: int = 10                # classifier calls to keep for variance check (10 = 10 s at 1 Hz)
+    min_cls_std: float = 0.08            # if recent confidence std < this → stationary source → suppress
 
 
 @dataclass(frozen=True)

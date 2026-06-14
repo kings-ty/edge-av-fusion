@@ -25,3 +25,17 @@ ros2_ws/log/
 
 # local tool state
 .claude/settings.local.json
+
+# raw media (large files — keep locally, do not push to git)
+Edge-materials/
+*.mp4
+*.m4a
+*.mov
+*.mkv
+*.avi
+*.wav
+*.mp3
+*.flac
+*.aac
+mel_visual.png
+tools/mel_visual.png

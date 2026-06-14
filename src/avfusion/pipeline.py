@@ -73,7 +73,11 @@ class Pipeline:
             candidate_hold_hops=cfg.fusion.candidate_hold_hops,
             doa_stability_deg=cfg.fusion.doa_stability_deg,
             trigger_threshold=cfg.classifier.trigger_threshold,
-            vision_timeout_s=cfg.fusion.vision_timeout_s)
+            vision_timeout_s=cfg.fusion.vision_timeout_s,
+            classifier_only=cfg.fusion.classifier_only,
+            max_sustained_alert_s=cfg.fusion.max_sustained_alert_s,
+            cls_history=cfg.fusion.cls_history,
+            min_cls_std=cfg.fusion.min_cls_std)
 
         self.mel = None
         self.classifier = None

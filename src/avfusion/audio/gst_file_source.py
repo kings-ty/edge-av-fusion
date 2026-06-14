@@ -55,8 +55,23 @@ class GstFileSource(AudioSource):
         else:
             video_branch = ""
 
+        import os
+        path = media_path
+        if not os.path.isabs(path) and not os.path.exists(path):
+            # Try relative to repo root (assuming this file is in src/avfusion/audio/)
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+            alt = os.path.join(repo_root, "Edge-materials", path)
+            if os.path.exists(alt):
+                path = alt
+            elif os.path.exists(os.path.join("Edge-materials", path)):
+                path = os.path.abspath(os.path.join("Edge-materials", path))
+        
+        path = os.path.abspath(path)
+        if not os.path.exists(path):
+            log.error("Media path does not exist: %s", path)
+
         desc = 'filesrc location="%s" ! qtdemux name=demux %s%s' % (
-            media_path, audio_branch, video_branch)
+            path, audio_branch, video_branch)
         self._owner = GstPipelineOwner(desc, "file-src")
 
         self._rechunk = AppsinkRechunker(self.ring, hop_samples, channels, sample_rate)

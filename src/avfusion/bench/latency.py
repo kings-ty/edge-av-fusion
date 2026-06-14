@@ -98,7 +98,18 @@ def run_pipeline_bench(args) -> None:
                               cfg.audio.hop_samples, args.hops + WARMUP_HOPS)
     elif args.source == "file":
         from ..audio.gst_file_source import GstFileSource
-        src = GstFileSource(args.media, cfg.audio.sample_rate,
+        media = args.media
+        if not media:
+            import os
+            if os.path.isdir("Edge-materials"):
+                clips = sorted([f for f in os.listdir("Edge-materials") if f.endswith(".mp4")])
+                if clips:
+                    media = clips[0]
+                    print("No media specified, defaulting to: %s" % media)
+        if not media:
+            raise SystemExit("Error: --source file requires --media or a non-empty Edge-materials/")
+
+        src = GstFileSource(media, cfg.audio.sample_rate,
                             cfg.audio.channels, cfg.audio.hop_samples,
                             cfg.audio.ring_capacity_hops)
     else:

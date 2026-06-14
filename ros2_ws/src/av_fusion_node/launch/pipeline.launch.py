@@ -1,8 +1,8 @@
-"""ros2 launch av_fusion_node pipeline.launch.py mode:=file media:=test.mp4
+"""ros2 launch av_fusion_node pipeline.launch.py mode:=file media:=20260422_152157.mp4
 
 Arguments:
   mode               alsa (Mode A, ReSpeaker) | file (Mode B) | pyaudio
-  media              .mp4 path, required when mode:=file
+  media              .mp4 path or filename in Edge-materials/, required when mode:=file
   config             pipeline.yaml override (default: repo config)
   enable_classifier  set false for DoA-only bring-up
   avfusion_src       path to the repo's src/ (exported as AVFUSION_SRC)
